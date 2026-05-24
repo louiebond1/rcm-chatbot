@@ -137,19 +137,50 @@ app.get('/', (req, res) => {
     if (empty) empty.style.display = 'none';
     addMsg('user', text);
     showTyping();
+
+    let bubble = null;
+    let fullText = '';
+
     try {
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, sessionId })
       });
-      const data = await res.json();
-      removeTyping();
-      if (data.error) { addMsg('assistant', 'Sorry, something went wrong. Please try again.'); }
-      else { addMsg('assistant', data.reply); }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop();
+        for (const part of parts) {
+          if (!part.startsWith('data: ')) continue;
+          let parsed;
+          try { parsed = JSON.parse(part.slice(6)); } catch { continue; }
+          if (parsed.type === 'delta') {
+            if (!bubble) {
+              removeTyping();
+              bubble = addMsg('assistant', '');
+            }
+            fullText += parsed.text;
+            bubble.textContent = fullText.replace(/【[^】]*】/g, '').trim();
+            chat.scrollTop = chat.scrollHeight;
+          } else if (parsed.type === 'done') {
+            if (!bubble) { removeTyping(); addMsg('assistant', fullText || '(no response)'); }
+          } else if (parsed.type === 'error') {
+            removeTyping();
+            addMsg('assistant', 'Sorry, something went wrong. Please try again.');
+          }
+        }
+      }
     } catch {
       removeTyping();
-      addMsg('assistant', 'Sorry, something went wrong. Please try again.');
+      if (!bubble) addMsg('assistant', 'Sorry, something went wrong. Please try again.');
     } finally {
       send.disabled = false;
       input.focus();
@@ -165,6 +196,12 @@ app.post('/chat', async (req, res) => {
   if (!message || !sessionId) return res.status(400).json({ error: 'Missing fields' });
   if (!ASSISTANT_ID) return res.status(500).json({ error: 'Assistant not configured' });
 
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
   try {
     let threadId = threads.get(sessionId);
     if (!threadId) {
@@ -174,18 +211,28 @@ app.post('/chat', async (req, res) => {
     }
 
     await openai.beta.threads.messages.create(threadId, { role: 'user', content: message });
-    const run = await openai.beta.threads.runs.createAndPoll(threadId, { assistant_id: ASSISTANT_ID });
 
-    if (run.status !== 'completed') return res.status(500).json({ error: 'Run failed: ' + run.status });
+    const stream = openai.beta.threads.runs.stream(threadId, { assistant_id: ASSISTANT_ID });
 
-    const msgs = await openai.beta.threads.messages.list(threadId, { order: 'desc', limit: 1 });
-    const raw = msgs.data[0]?.content?.[0]?.text?.value || '';
-    const reply = raw.replace(/【[^】]*】/g, '').trim();
+    stream.on('textDelta', (delta) => {
+      if (delta.value) send({ type: 'delta', text: delta.value });
+    });
 
-    return res.json({ reply });
+    stream.on('error', (err) => {
+      console.error('Stream error:', err.message);
+      send({ type: 'error' });
+      res.end();
+    });
+
+    stream.on('end', () => {
+      send({ type: 'done' });
+      res.end();
+    });
+
   } catch (err) {
     console.error('Chat error:', err.message);
-    return res.status(500).json({ error: err.message });
+    send({ type: 'error' });
+    res.end();
   }
 });
 
