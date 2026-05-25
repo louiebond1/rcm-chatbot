@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 const express = require('express');
 const OpenAI = require('openai');
 
@@ -145,30 +145,29 @@ app.get('/', (req, res) => {
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId })
+        body: JSON.stringify({ message: text, sessionId: sessionId })
       });
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let reading = true;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+      while (reading) {
+        const chunk = await reader.read();
+        if (chunk.done) { reading = false; break; }
+        buffer += decoder.decode(chunk.value);
         const parts = buffer.split('\n\n');
-        buffer = parts.pop();
-        for (const part of parts) {
-          if (!part.startsWith('data: ')) continue;
-          let parsed;
-          try { parsed = JSON.parse(part.slice(6)); } catch { continue; }
+        buffer = parts.pop() || '';
+        for (let i = 0; i < parts.length; i++) {
+          const part = parts[i];
+          if (part.indexOf('data: ') !== 0) continue;
+          let parsed = null;
+          try { parsed = JSON.parse(part.slice(6)); } catch(e) { continue; }
           if (parsed.type === 'delta') {
-            if (!bubble) {
-              removeTyping();
-              bubble = addMsg('assistant', '');
-            }
+            if (!bubble) { removeTyping(); bubble = addMsg('assistant', ''); }
             fullText += parsed.text;
-            bubble.textContent = fullText.replace(/【[^】]*】/g, '').trim();
+            bubble.textContent = fullText.trim();
             chat.scrollTop = chat.scrollHeight;
           } else if (parsed.type === 'done') {
             if (!bubble) { removeTyping(); addMsg('assistant', fullText || '(no response)'); }
@@ -178,7 +177,7 @@ app.get('/', (req, res) => {
           }
         }
       }
-    } catch {
+    } catch(err) {
       removeTyping();
       if (!bubble) addMsg('assistant', 'Sorry, something went wrong. Please try again.');
     } finally {
@@ -215,7 +214,11 @@ app.post('/chat', async (req, res) => {
     const stream = openai.beta.threads.runs.stream(threadId, { assistant_id: ASSISTANT_ID });
 
     stream.on('textDelta', (delta) => {
-      if (delta.value) send({ type: 'delta', text: delta.value });
+      if (delta.value) {
+        // Strip OpenAI citation markers server-side (avoids non-ASCII chars in browser JS)
+        const text = delta.value.replace(/【[^】]*】/g, '');
+        if (text) send({ type: 'delta', text: text });
+      }
     });
 
     stream.on('error', (err) => {
