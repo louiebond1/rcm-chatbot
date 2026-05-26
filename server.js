@@ -32,26 +32,32 @@ app.post('/chat', async (req, res) => {
 
     await openai.beta.threads.messages.create(threadId, { role: 'user', content: message });
 
-    const stream = openai.beta.threads.runs.stream(threadId, { assistant_id: ASSISTANT_ID });
+    // Use raw SSE iteration — works across all SDK versions
+    const stream = await openai.beta.threads.runs.stream(threadId, { assistant_id: ASSISTANT_ID });
 
-    stream.on('textDelta', (delta) => {
-      if (delta.value) {
-        // Strip OpenAI citation markers server-side
-        const text = delta.value.replace(/【[^】]*】/g, '');
-        if (text) send({ type: 'delta', text: text });
+    for await (const event of stream) {
+      console.log('event:', event.event);
+      if (event.event === 'thread.message.delta') {
+        const blocks = event.data && event.data.delta && event.data.delta.content;
+        if (blocks) {
+          for (const block of blocks) {
+            if (block.type === 'text' && block.text && block.text.value) {
+              // Strip citation markers
+              const text = block.text.value.replace(/【[^】]*】/g, '');
+              if (text) send({ type: 'delta', text: text });
+            }
+          }
+        }
+      } else if (event.event === 'thread.run.failed' || event.event === 'thread.run.cancelled' || event.event === 'thread.run.expired') {
+        console.error('Run did not complete:', event.event, JSON.stringify(event.data && event.data.last_error));
+        send({ type: 'error' });
+        res.end();
+        return;
       }
-    });
+    }
 
-    stream.on('error', (err) => {
-      console.error('Stream error:', err.message);
-      send({ type: 'error' });
-      res.end();
-    });
-
-    stream.on('end', () => {
-      send({ type: 'done' });
-      res.end();
-    });
+    send({ type: 'done' });
+    res.end();
 
   } catch (err) {
     console.error('Chat error:', err.message);
