@@ -32,35 +32,27 @@ app.post('/chat', async (req, res) => {
 
     await openai.beta.threads.messages.create(threadId, { role: 'user', content: message });
 
-    // Use raw SSE iteration — works across all SDK versions
-    const stream = await openai.beta.threads.runs.stream(threadId, { assistant_id: ASSISTANT_ID });
+    const run = await openai.beta.threads.runs.createAndPoll(threadId, { assistant_id: ASSISTANT_ID });
+    console.log('Run status:', run.status);
 
-    for await (const event of stream) {
-      console.log('event:', event.event);
-      if (event.event === 'thread.message.delta') {
-        const blocks = event.data && event.data.delta && event.data.delta.content;
-        if (blocks) {
-          for (const block of blocks) {
-            if (block.type === 'text' && block.text && block.text.value) {
-              // Strip citation markers
-              const text = block.text.value.replace(/【[^】]*】/g, '');
-              if (text) send({ type: 'delta', text: text });
-            }
-          }
-        }
-      } else if (event.event === 'thread.run.failed' || event.event === 'thread.run.cancelled' || event.event === 'thread.run.expired') {
-        console.error('Run did not complete:', event.event, JSON.stringify(event.data && event.data.last_error));
-        send({ type: 'error' });
-        res.end();
-        return;
-      }
+    if (run.status !== 'completed') {
+      console.error('Run failed:', run.status, JSON.stringify(run.last_error));
+      send({ type: 'error' });
+      res.end();
+      return;
     }
 
+    const msgs = await openai.beta.threads.messages.list(threadId, { order: 'desc', limit: 1 });
+    const raw = msgs.data[0] && msgs.data[0].content && msgs.data[0].content[0] &&
+                msgs.data[0].content[0].text && msgs.data[0].content[0].text.value || '';
+    const reply = raw.replace(/【[^】]*】/g, '').trim();
+
+    send({ type: 'delta', text: reply });
     send({ type: 'done' });
     res.end();
 
   } catch (err) {
-    console.error('Chat error:', err.message);
+    console.error('Chat error:', err.message, err.stack);
     send({ type: 'error' });
     res.end();
   }
