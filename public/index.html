@@ -52,12 +52,7 @@
   <div class="empty" id="empty">
     <h2>Ask me anything about RCM</h2>
     <p>I'm trained on EX3's SAP SuccessFactors Recruiting documents.<br>Ask about configuration, permissions, candidates, offers, and more.</p>
-    <div class="pills">
-      <div class="pill" onclick="ask(this)">Can Dan Greer see the gender field?</div>
-      <div class="pill" onclick="ask(this)">How does candidate screening work?</div>
-      <div class="pill" onclick="ask(this)">What are the steps to create a job offer?</div>
-      <div class="pill" onclick="ask(this)">Can Tuesday Clark edit salary fields?</div>
-    </div>
+    <div class="pills" id="pills"></div>
   </div>
 </div>
 
@@ -76,6 +71,36 @@
   var empty = document.getElementById('empty');
   var sessionId = localStorage.getItem('rcm_session') || Math.random().toString(36).slice(2);
   localStorage.setItem('rcm_session', sessionId);
+
+  var allPills = [
+    'Can Dan Greer see the gender field?',
+    'Can Tuesday Clark edit salary fields?',
+    'What are the steps in test case FC1-RC-001?',
+    'How does candidate screening work?',
+    'What are the steps to create a job offer?',
+    'Can Alexander Brackley edit the job requisition title?',
+    'What can Wim Vanderhoof see at the offer stage?',
+    'Can Molly Gray view interview results?',
+    'What permissions does Iain Kirkwood have at screening?',
+    'Can Jaspaul Rai approve an offer?',
+    'What fields can a Recruiter edit at the interview stage?',
+    'Can a Finance role see candidate names?'
+  ];
+  (function() {
+    var pool = allPills.slice();
+    for (var i = pool.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+    var pillsEl = document.getElementById('pills');
+    for (var k = 0; k < 4; k++) {
+      var d = document.createElement('div');
+      d.className = 'pill';
+      d.textContent = pool[k];
+      d.onclick = function() { ask(this); };
+      pillsEl.appendChild(d);
+    }
+  })();
 
   input.addEventListener('input', function() {
     input.style.height = 'auto';
